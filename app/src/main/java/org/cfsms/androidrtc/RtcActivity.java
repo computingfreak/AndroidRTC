@@ -1,12 +1,14 @@
-package fr.pchab.androidrtc;
+package org.cfsms.androidrtc;
 
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Point;
 import android.opengl.GLSurfaceView;
 import android.os.Bundle;
-import android.support.annotation.NonNull;
+import android.preference.PreferenceManager;
+import android.util.Log;
 import android.view.Window;
 import android.view.WindowManager.LayoutParams;
 import android.widget.Toast;
@@ -62,8 +64,7 @@ public class RtcActivity extends Activity implements WebRtcClient.RtcListener {
                         | LayoutParams.FLAG_SHOW_WHEN_LOCKED
                         | LayoutParams.FLAG_TURN_SCREEN_ON);
         setContentView(R.layout.main);
-        mSocketAddress = "http://" + getResources().getString(R.string.host);
-        mSocketAddress += (":" + getResources().getString(R.string.port) + "/");
+        mSocketAddress = "http://" + getResources().getString(R.string.host) + ":" + getResources().getString(R.string.port) + "/";
 
         vsv = (GLSurfaceView) findViewById(R.id.glview_call);
         vsv.setPreserveEGLContextOnPause(true);
@@ -85,27 +86,34 @@ public class RtcActivity extends Activity implements WebRtcClient.RtcListener {
 
         final Intent intent = getIntent();
         final String action = intent.getAction();
-
         if (Intent.ACTION_VIEW.equals(action)) {
             final List<String> segments = intent.getData().getPathSegments();
+            Log.i("sms", "list of segments : " + segments);
             callerId = segments.get(0);
         }
-        checkPermissions();
-    }
 
-    private void checkPermissions() {
-        permissionChecker.verifyPermissions(this, RequiredPermissions, new PermissionChecker.VerifyPermissionsCallback() {
-
-            @Override
-            public void onPermissionAllGranted() {
-
+        Bundle b = intent.getBundleExtra("pass");
+        int type = b.getInt("type");
+        try {
+            if (type == 1) {
+                String own = b.getString("own");
+                Log.i("sms", "Own id = " + own);
+                PreferenceManager.getDefaultSharedPreferences(RtcActivity.this).edit().putString("MYUSERNAME", own).apply();
+                answer(own);
+            } else if (type == 2) {
+                String other = b.getString("other");
+                String own = b.getString("own");
+                if (own.isEmpty() || own.trim().length() == 0) {
+                    own = PreferenceManager.getDefaultSharedPreferences(RtcActivity.this).getString("MYUSERNAME", "defaultStringIfNothingFound");
+                } else {
+                    PreferenceManager.getDefaultSharedPreferences(RtcActivity.this).edit().putString("MYUSERNAME", own).apply();
+                }
+                Log.i("sms", "own = " + own + ", other id = " + other);
+                call(other, own);
             }
-
-            @Override
-            public void onPermissionDeny(String[] permissions) {
-                Toast.makeText(RtcActivity.this, "Please grant required permissions.", Toast.LENGTH_LONG).show();
-            }
-        });
+        } catch (Exception e) {
+            Log.i("sms", "I love Exceptions" + e);
+        }
     }
 
     private void init() {
@@ -145,6 +153,7 @@ public class RtcActivity extends Activity implements WebRtcClient.RtcListener {
 
     @Override
     public void onCallReady(String callId) {
+        System.out.println("SMS oncallready");
         if (callerId != null) {
             try {
                 answer(callerId);
@@ -152,33 +161,47 @@ public class RtcActivity extends Activity implements WebRtcClient.RtcListener {
                 e.printStackTrace();
             }
         } else {
-            call(callId);
+            String own = PreferenceManager.getDefaultSharedPreferences(RtcActivity.this).getString("MYUSERNAME", "defaultStringIfNothingFound");
+            call(callId, own);
         }
     }
 
     public void answer(String callerId) throws JSONException {
+        System.out.println("SMS answer callerID = " + callerId);
         client.sendMessage(callerId, "init", null);
-        startCam();
+        startCam(callerId);
     }
 
-    public void call(String callId) {
+    public void call(String callId, String ownUserName) {
+        System.out.println("SMS call callID = " + callId);
         Intent msg = new Intent(Intent.ACTION_SEND);
         msg.putExtra(Intent.EXTRA_TEXT, mSocketAddress + callId);
         msg.setType("text/plain");
+        Bundle b = new Bundle();
+        b.putString("own", ownUserName);
+        msg.putExtra("id", b);
         startActivityForResult(Intent.createChooser(msg, "Call someone :"), VIDEO_CALL_SENT);
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == VIDEO_CALL_SENT) {
-            startCam();
+            String ownUserName = "";
+            if (data != null) {
+                Bundle b = data.getBundleExtra("id");
+                ownUserName = data.getStringExtra(b.getString("own"));
+            }
+            if (ownUserName.isEmpty() || ownUserName.trim().length() == 0) {
+                ownUserName = PreferenceManager.getDefaultSharedPreferences(RtcActivity.this).getString("MYUSERNAME", "defaultStringIfNothingFound");
+            }
+            startCam(ownUserName);
         }
     }
 
-    public void startCam() {
+    public void startCam(String ownUserName) {
         // Camera settings
         if (PermissionChecker.hasPermissions(this, RequiredPermissions)) {
-            client.start("android_test");
+            client.start(ownUserName);
         }
     }
 
@@ -219,11 +242,5 @@ public class RtcActivity extends Activity implements WebRtcClient.RtcListener {
                 LOCAL_X_CONNECTING, LOCAL_Y_CONNECTING,
                 LOCAL_WIDTH_CONNECTING, LOCAL_HEIGHT_CONNECTING,
                 scalingType, false);
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        permissionChecker.onRequestPermissionsResult(requestCode, permissions, grantResults);
     }
 }
